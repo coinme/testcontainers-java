@@ -80,11 +80,24 @@ public interface Container<SELF extends Container<SELF>> extends LinkableContain
      * Adds a file system binding. Consider using {@link #withFileSystemBind(String, String, BindMode)}
      * for building a container in a fluent style.
      *
-     * @param hostPath the file system path on the host
+     * @param hostPath      the file system path on the host
      * @param containerPath the file system path inside the container
-     * @param mode the bind mode
+     * @param mode          the bind mode
      */
-    void addFileSystemBind(String hostPath, String containerPath, BindMode mode);
+    default void addFileSystemBind(final String hostPath, final String containerPath, final BindMode mode) {
+        addFileSystemBind(hostPath, containerPath, mode, SelinuxContext.NONE);
+    }
+
+    /**
+     * Adds a file system binding. Consider using {@link #withFileSystemBind(String, String, BindMode)}
+     * for building a container in a fluent style.
+     *
+     * @param hostPath      the file system path on the host
+     * @param containerPath the file system path inside the container
+     * @param mode          the bind mode
+     * @param selinuxContext selinux context argument to use for this file
+     */
+    void addFileSystemBind(String hostPath, String containerPath, BindMode mode, SelinuxContext selinuxContext);
 
     /**
      * Add a link to another container.
@@ -197,6 +210,24 @@ public interface Container<SELF extends Container<SELF>> extends LinkableContain
     SELF withNetworkMode(String networkMode);
 
     /**
+     * Set the network for this container, similar to the <code>--network &lt;name&gt;</code>
+     * option on the docker CLI.
+     *
+     * @param network the instance of {@link Network}
+     * @return this
+     */
+    SELF withNetwork(Network network);
+
+    /**
+     * Set the network aliases for this container, similar to the <code>--network-alias &lt;my-service&gt;</code>
+     * option on the docker CLI.
+     *
+     * @param aliases the list of aliases
+     * @return this
+     */
+    SELF withNetworkAliases(String... aliases);
+
+    /**
      * Map a resource (file or directory) on the classpath to a path inside the container.
      * This will only work if you are running your tests outside a Docker container.
      *
@@ -205,7 +236,22 @@ public interface Container<SELF extends Container<SELF>> extends LinkableContain
      * @param mode          access mode for the file
      * @return this
      */
-    SELF withClasspathResourceMapping(String resourcePath, String containerPath, BindMode mode);
+    default SELF withClasspathResourceMapping(final String resourcePath, final String containerPath, final BindMode mode) {
+        withClasspathResourceMapping(resourcePath, containerPath, mode, SelinuxContext.NONE);
+        return self();
+    }
+
+    /**
+     * Map a resource (file or directory) on the classpath to a path inside the container.
+     * This will only work if you are running your tests outside a Docker container.
+     *
+     * @param resourcePath   path to the resource on the classpath (relative to the classpath root; should not start with a leading slash)
+     * @param containerPath  path this should be mapped to inside the container
+     * @param mode           access mode for the file
+     * @param selinuxContext selinux context argument to use for this file
+     * @return this
+     */
+    SELF withClasspathResourceMapping(String resourcePath, String containerPath, BindMode mode, SelinuxContext selinuxContext);
 
     /**
      * Set the duration of waiting time until container treated as started.
@@ -257,6 +303,20 @@ public interface Container<SELF extends Container<SELF>> extends LinkableContain
      * @return is the container currently running?
      */
     Boolean isRunning();
+
+    /**
+     * Get the actual mapped port for a first port exposed by the container.
+     *
+     * @return the port that the exposed port is mapped to
+     * @throws IllegalStateException if there are no exposed ports
+     */
+    default Integer getFirstMappedPort() {
+        return getExposedPorts()
+                .stream()
+                .findFirst()
+                .map(this::getMappedPort)
+                .orElseThrow(() -> new IllegalStateException("Container doesn't expose any ports"));
+    }
 
     /**
      * Get the actual mapped port for a given port exposed by the container.
@@ -388,35 +448,5 @@ public interface Container<SELF extends Container<SELF>> extends LinkableContain
 
     void setLinkedContainers(Map<String, LinkableContainer> linkedContainers);
 
-    /**
-     * @deprecated set by GenericContainer and should never be set outside
-     */
-    @Deprecated
-    void setDockerClient(DockerClient dockerClient);
-
-    /**
-     * @deprecated set by GenericContainer and should never be set outside
-     */
-    @Deprecated
-    void setDockerDaemonInfo(Info dockerDaemonInfo);
-
-    /**
-     * @deprecated set by GenericContainer and should never be set outside
-     */
-    @Deprecated
-    void setContainerId(String containerId);
-
-    /**
-     * @deprecated set by GenericContainer and should never be set outside
-     */
-    @Deprecated
-    void setContainerName(String containerName);
-
     void setWaitStrategy(WaitStrategy waitStrategy);
-
-    /**
-     * @deprecated set by GenericContainer and should never be set outside
-     */
-    @Deprecated
-    void setContainerInfo(InspectContainerResponse containerInfo);
 }

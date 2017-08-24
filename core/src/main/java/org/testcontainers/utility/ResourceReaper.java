@@ -5,15 +5,15 @@ import com.github.dockerjava.api.command.InspectContainerResponse;
 import com.github.dockerjava.api.exception.DockerException;
 import com.github.dockerjava.api.exception.InternalServerErrorException;
 import com.github.dockerjava.api.exception.NotFoundException;
-import com.github.dockerjava.api.model.Container;
 import com.github.dockerjava.api.model.Network;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.testcontainers.DockerClientFactory;
 
-import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -25,7 +25,7 @@ public final class ResourceReaper {
     private static ResourceReaper instance;
     private final DockerClient dockerClient;
     private Map<String, String> registeredContainers = new ConcurrentHashMap<>();
-    private List<String> registeredNetworks = new ArrayList<>();
+    private Set<String> registeredNetworks = Collections.newSetFromMap(new ConcurrentHashMap<>());
 
     private ResourceReaper() {
         dockerClient = DockerClientFactory.instance().client();
@@ -130,37 +130,80 @@ public final class ResourceReaper {
     /**
      * Register a network to be cleaned up at JVM shutdown.
      *
-     * @param networkName   the image name of the network
+     * @param id   the ID of the network
      */
-    public void registerNetworkForCleanup(String networkName) {
-        registeredNetworks.add(networkName);
+    public void registerNetworkIdForCleanup(String id) {
+        registeredNetworks.add(id);
     }
 
     /**
-     * Removes any networks that contain the identifier.
-     * @param identifier
+     * @param networkName   the name of the network
+     * @deprecated see {@link ResourceReaper#registerNetworkIdForCleanup(String)}
      */
-    public void removeNetworks(String identifier) {
-      removeNetwork(identifier);
+    @Deprecated
+    public void registerNetworkForCleanup(String networkName) {
+        try {
+            // Try to find the network by name, so that we can register its ID for later deletion
+            dockerClient.listNetworksCmd()
+                    .withNameFilter(networkName)
+                    .exec()
+            .forEach(network -> registerNetworkIdForCleanup(network.getId()));
+        } catch (Exception e) {
+            LOGGER.trace("Error encountered when looking up network (name: {})", networkName);
+        }
     }
 
-    private void removeNetwork(String networkName) {
-        List<Network> networks;
-        try {
-            networks = dockerClient.listNetworksCmd().withNameFilter(networkName).exec();
-        } catch (DockerException e) {
-            LOGGER.trace("Error encountered when looking up network for removal (name: {}) - it may not have been removed", networkName);
-            return;
-        }
+    /**
+     * Removes a network by ID.
+     * @param id
+     */
+    public void removeNetworkById(String id) {
+      removeNetwork(id);
+    }
 
-        for (Network network : networks) {
+    /**
+     * Removes a network by ID.
+     * @param identifier
+     * @deprecated see {@link ResourceReaper#removeNetworkById(String)}
+     */
+    @Deprecated
+    public void removeNetworks(String identifier) {
+        removeNetworkById(identifier);
+    }
+
+    private void removeNetwork(String id) {
+        try {
+            List<Network> networks;
             try {
-                dockerClient.removeNetworkCmd(network.getId()).exec();
-                registeredNetworks.remove(network.getId());
-                LOGGER.debug("Removed network: {}", networkName);
-            } catch (DockerException e) {
-                LOGGER.trace("Error encountered removing network (name: {}) - it may not have been removed", network.getName());
+                // Try to find the network if it still exists
+                // Listing by ID first prevents docker-java logging an error if we just go blindly into removeNetworkCmd
+                networks = dockerClient.listNetworksCmd().withIdFilter(id).exec();
+            } catch (Exception e) {
+                LOGGER.trace("Error encountered when looking up network for removal (name: {}) - it may not have been removed", id);
+                return;
             }
+
+            // at this point networks should contain either 0 or 1 entries, depending on whether the network exists
+            // using a for loop we essentially treat the network like an optional, only applying the removal if it exists
+            for (Network network : networks) {
+                try {
+                    dockerClient.removeNetworkCmd(network.getId()).exec();
+                    registeredNetworks.remove(network.getId());
+                    LOGGER.debug("Removed network: {}", id);
+                } catch (Exception e) {
+                    LOGGER.trace("Error encountered removing network (name: {}) - it may not have been removed", network.getName());
+                }
+            }
+        } finally {
+            registeredNetworks.remove(id);
         }
+    }
+
+    public void unregisterNetwork(String identifier) {
+        registeredNetworks.remove(identifier);
+    }
+
+    public void unregisterContainer(String identifier) {
+        registeredContainers.remove(identifier);
     }
 }

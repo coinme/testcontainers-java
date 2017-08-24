@@ -25,6 +25,8 @@ import java.util.regex.Pattern;
 
 import static org.rnorth.visibleassertions.VisibleAssertions.*;
 import static org.testcontainers.containers.BindMode.READ_ONLY;
+import static org.testcontainers.containers.BindMode.READ_WRITE;
+import static org.testcontainers.containers.SelinuxContext.SHARED;
 
 /**
  * Tests for GenericContainerRules
@@ -102,6 +104,15 @@ public class GenericContainerRuleTest {
             .withCommand("/bin/sh", "-c", "while true; do cat /content.txt | nc -l -p 80; done");
 
     /**
+     * Map a file on the classpath to a file in the container, and then expose the content for testing.
+     */
+    @ClassRule
+    public static GenericContainer alpineClasspathResourceSelinux = new GenericContainer("alpine:3.2")
+            .withExposedPorts(80)
+            .withClasspathResourceMapping("mappable-resource/test-resource.txt", "/content.txt", READ_WRITE, SHARED)
+            .withCommand("/bin/sh", "-c", "while true; do cat /content.txt | nc -l -p 80; done");
+
+    /**
      * Create a container with an extra host entry and expose the content of /etc/hosts for testing.
      */
     @ClassRule
@@ -132,6 +143,15 @@ public class GenericContainerRuleTest {
 //        assertTrue("The list contains an item that was put in (redis is working!)", testList2.contains("bar"));
 //        assertTrue("The list contains an item that was put in (redis is working!)", testList2.contains("baz"));
 //    }
+
+    @Test
+    public void testIsRunning() {
+        try (GenericContainer container = new GenericContainer()) {
+            assertFalse("Container is not started and not running", container.isRunning());
+            container.start();
+            assertTrue("Container is started and running", container.isRunning());
+        }
+    }
 
     @Test
     public void simpleRabbitMqTest() throws IOException, TimeoutException {
@@ -201,6 +221,12 @@ public class GenericContainerRuleTest {
         String line = getReaderForContainerPort80(alpineClasspathResource).readLine();
 
         assertEquals("Resource on the classpath can be mapped using calls to withClasspathResourceMapping", "FOOBAR", line);
+    }
+
+    @Test
+    public void customClasspathResourceMappingWithSelinuxTest() throws IOException {
+        String line = getReaderForContainerPort80(alpineClasspathResourceSelinux).readLine();
+        assertEquals("Resource on the classpath can be mapped using calls to withClasspathResourceMappingSelinux", "FOOBAR", line);
     }
 
     @Test
@@ -308,7 +334,7 @@ public class GenericContainerRuleTest {
         return Unreliables.retryUntilSuccess(10, TimeUnit.SECONDS, () -> {
             Uninterruptibles.sleepUninterruptibly(1, TimeUnit.SECONDS);
 
-            Socket socket = new Socket(container.getContainerIpAddress(), container.getMappedPort(80));
+            Socket socket = new Socket(container.getContainerIpAddress(), container.getFirstMappedPort());
             return new BufferedReader(new InputStreamReader(socket.getInputStream()));
         });
     }

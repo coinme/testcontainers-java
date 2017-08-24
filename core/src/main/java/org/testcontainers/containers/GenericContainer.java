@@ -8,9 +8,7 @@ import com.github.dockerjava.api.exception.DockerException;
 import com.github.dockerjava.api.model.*;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
-import lombok.Data;
-import lombok.EqualsAndHashCode;
-import lombok.NonNull;
+import lombok.*;
 import org.jetbrains.annotations.Nullable;
 import org.junit.runner.Description;
 import org.rnorth.ducttape.ratelimits.RateLimiter;
@@ -78,6 +76,12 @@ public class GenericContainer<SELF extends GenericContainer<SELF>>
     private String networkMode;
 
     @NonNull
+    private Network network;
+
+    @NonNull
+    private List<String> networkAliases = new ArrayList<>();
+
+    @NonNull
     private Future<String> image;
 
     @NonNull
@@ -108,17 +112,22 @@ public class GenericContainer<SELF extends GenericContainer<SELF>>
     /*
      * Unique instance of DockerClient for use by this container object.
      */
+    @Setter(AccessLevel.NONE)
     protected DockerClient dockerClient = DockerClientFactory.instance().client();
 
     /*
      * Info about the Docker server; lazily fetched.
      */
+    @Setter(AccessLevel.NONE)
     protected Info dockerDaemonInfo = null;
 
     /*
      * Set during container startup
      */
+    @Setter(AccessLevel.NONE)
     protected String containerId;
+
+    @Setter(AccessLevel.NONE)
     protected String containerName;
 
     /**
@@ -128,6 +137,7 @@ public class GenericContainer<SELF extends GenericContainer<SELF>>
     protected WaitStrategy waitStrategy = Wait.defaultWaitStrategy();
 
     @Nullable
+    @Setter(AccessLevel.NONE)
     private InspectContainerResponse containerInfo;
 
     private List<Consumer<OutputFrame>> logConsumers = new ArrayList<>();
@@ -143,7 +153,7 @@ public class GenericContainer<SELF extends GenericContainer<SELF>>
 
 
     public GenericContainer() {
-        this("alpine:3.2");
+        this(TestcontainersConfiguration.getInstance().getTinyImage());
     }
 
     public GenericContainer(@NonNull final String dockerImageName) {
@@ -408,7 +418,10 @@ public class GenericContainer<SELF extends GenericContainer<SELF>>
                 .toArray(String[]::new);
         createCommand.withExtraHosts(extraHostsArray);
 
-        if (networkMode != null) {
+        if (network != null) {
+            createCommand.withNetworkMode(network.getId());
+            createCommand.withAliases(this.networkAliases);
+        } else if (networkMode != null) {
             createCommand.withNetworkMode(networkMode);
         }
 
@@ -481,10 +494,10 @@ public class GenericContainer<SELF extends GenericContainer<SELF>>
      * {@inheritDoc}
      */
     @Override
-    public void addFileSystemBind(String hostPath, String containerPath, BindMode mode) {
+    public void addFileSystemBind(final String hostPath, final String containerPath, final BindMode mode, final SelinuxContext selinuxContext) {
 
         final MountableFile mountableFile = MountableFile.forHostPath(hostPath);
-        binds.add(new Bind(mountableFile.getResolvedPath(), new Volume(containerPath), mode.accessMode));
+        binds.add(new Bind(mountableFile.getResolvedPath(), new Volume(containerPath), mode.accessMode, selinuxContext.selContext));
     }
 
     /**
@@ -611,14 +624,34 @@ public class GenericContainer<SELF extends GenericContainer<SELF>>
         return self();
     }
 
+    @Override
+    public SELF withNetwork(Network network) {
+        this.network = network;
+        return self();
+    }
+
+    @Override
+    public SELF withNetworkAliases(String... aliases) {
+        Collections.addAll(this.networkAliases, aliases);
+        return self();
+    }
+
     /**
      * {@inheritDoc}
      */
     @Override
-    public SELF withClasspathResourceMapping(String resourcePath, String containerPath, BindMode mode) {
+    public SELF withClasspathResourceMapping(final String resourcePath, final String containerPath, final BindMode mode) {
+        return withClasspathResourceMapping(resourcePath, containerPath, mode, SelinuxContext.NONE);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public SELF withClasspathResourceMapping(final String resourcePath, final String containerPath, final BindMode mode, final SelinuxContext selinuxContext) {
         final MountableFile mountableFile = MountableFile.forClasspathResource(resourcePath);
 
-        this.addFileSystemBind(mountableFile.getResolvedPath(), containerPath, mode);
+        this.addFileSystemBind(mountableFile.getResolvedPath(), containerPath, mode, selinuxContext);
 
         return self();
     }
@@ -690,7 +723,7 @@ public class GenericContainer<SELF extends GenericContainer<SELF>>
     @Override
     public Boolean isRunning() {
         try {
-            return dockerClient.inspectContainerCmd(containerId).exec().getState().getRunning();
+            return containerId != null && dockerClient.inspectContainerCmd(containerId).exec().getState().getRunning();
         } catch (DockerException e) {
             return false;
         }
